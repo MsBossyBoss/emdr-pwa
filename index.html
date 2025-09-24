@@ -74,6 +74,17 @@
         </div>
 
         <div>
+          <label>Sound</label>
+          <select id="sound">
+            <option value="sine">Beep (sine)</option>
+            <option value="triangle">Beep (triangle)</option>
+            <option value="noise">Noise (white)</option>
+            <option value="custom">Custom File</option>
+          </select>
+          <input id="audioFile" type="file" accept="audio/*" style="margin-top:6px; display:none;">
+        </div>
+
+        <div>
           <label>Audio Rate (Hz)</label>
           <input id="rate" type="range" min="0.2" max="4" step="0.1" value="1.2">
           <div><span id="rateVal">1.2</span> Hz</div>
@@ -115,6 +126,8 @@
     const sizeEl = document.getElementById('size');
     const colorEl = document.getElementById('color');
     const audioEnabledEl = document.getElementById('audioEnabled');
+    const soundEl = document.getElementById('sound');
+    const audioFileEl = document.getElementById('audioFile');
     const rateEl = document.getElementById('rate');
     const volumeEl = document.getElementById('volume');
     const minutesEl = document.getElementById('minutes');
@@ -129,11 +142,13 @@
 
     // --- Local settings ---
     const KEY = 'emdr.settings.v1';
-    const loadSettings = () => { try { return JSON.parse(localStorage.getItem(KEY)) || {}; } catch { return {}; } };
+    const loadSettings = () => {
+      try { return JSON.parse(localStorage.getItem(KEY)) || {}; } catch { return {}; }
+    };
     const saveSettings = () => {
       const s = {
         visual: { mode: visualModeEl.value, speed: +speedEl.value, size: +sizeEl.value, color: colorEl.value },
-        audio: { enabled: audioEnabledEl.checked, rate: +rateEl.value, volume: +volumeEl.value },
+        audio: { enabled: audioEnabledEl.checked, rate: +rateEl.value, volume: +volumeEl.value, sound: soundEl.value },
         session: { minutes: +minutesEl.value }
       };
       localStorage.setItem(KEY, JSON.stringify(s));
@@ -150,8 +165,10 @@
       audioEnabledEl.checked = settings.audio.enabled ?? true;
       rateEl.value = settings.audio.rate ?? 1.2;
       volumeEl.value = settings.audio.volume ?? 0.2;
+      if (settings.audio.sound) soundEl.value = settings.audio.sound;
     }
     if (settings.session) minutesEl.value = settings.session.minutes ?? 5;
+    audioFileEl.style.display = soundEl.value === 'custom' ? 'block' : 'none';
 
     const updateLabels = () => {
       speedVal.textContent = speedEl.value;
@@ -160,7 +177,7 @@
       volVal.textContent = (+volumeEl.value).toFixed(2);
       timeLeft.textContent = fmtTime(remainingMs/1000);
     };
-    [visualModeEl, speedEl, sizeEl, colorEl, audioEnabledEl, rateEl, volumeEl, minutesEl]
+    [visualModeEl, speedEl, sizeEl, colorEl, audioEnabledEl, rateEl, volumeEl, minutesEl, soundEl]
       .forEach(el => el.addEventListener('input', () => { saveSettings(); updateLabels(); applyVisualStyle(); }));
 
     // --- Visual engine ---
@@ -197,34 +214,112 @@
     }
 
     // --- Audio engine (Web Audio) ---
-    let ac, osc, gain, panner, panIntervalId = null, panState = -1;
-    function ensureAudio() {
+    let ac, gain, panner, currentSource = null, panIntervalId = null, panState = -1, loadedBuffer = null;
+
+    function ensureContext() {
       if (!ac) {
         ac = new (window.AudioContext || window.webkitAudioContext)();
-        osc = ac.createOscillator();
-        osc.type = 'sine';
         gain = ac.createGain(); gain.gain.value = +volumeEl.value;
         panner = new StereoPannerNode(ac, { pan: -1 });
-        osc.connect(gain).connect(panner).connect(ac.destination);
-        osc.start();
+        gain.connect(panner).connect(ac.destination);
       }
     }
+
+    function stopSource() {
+      if (currentSource) {
+        try { currentSource.stop(); } catch {}
+        try { currentSource.disconnect(); } catch {}
+        currentSource = null;
+      }
+    }
+
+    function createSource() {
+      const sound = soundEl.value;
+      if (sound === 'sine' || sound === 'triangle') {
+        const osc = ac.createOscillator();
+        osc.type = sound;        // 'sine' or 'triangle'
+        osc.connect(gain);
+        osc.start();
+        return osc;
+      } else if (sound === 'noise') {
+        // Looping white noise buffer
+        const seconds = 2;
+        const buffer = ac.createBuffer(2, ac.sampleRate * seconds, ac.sampleRate);
+        for (let ch = 0; ch < 2; ch++) {
+          const data = buffer.getChannelData(ch);
+          for (let i = 0; i < data.length; i++) data[i] = Math.random() * 2 - 1;
+        }
+        const src = ac.createBufferSource();
+        src.buffer = buffer;
+        src.loop = true;
+        src.connect(gain);
+        src.start();
+        return src;
+      } else if (sound === 'custom') {
+        if (!loadedBuffer) { alert('Choose an audio file first.'); return null; }
+        const src = ac.createBufferSource();
+        src.buffer = loadedBuffer;
+        src.loop = true;
+        src.connect(gain);
+        src.start();
+        return src;
+      }
+      return null;
+    }
+
     function startPanning() {
       stopPanning();
-      const rate = +rateEl.value;
+      const rate = +rateEl.value; // alternations per second
       const periodMs = 1000 / rate;
       panIntervalId = setInterval(() => {
         panState = -panState;
         if (panner) panner.pan.setValueAtTime(panState, ac.currentTime);
         try { if (navigator.vibrate) navigator.vibrate(10); } catch {}
-      }, periodMs/2);
+      }, periodMs/2); // half-period per side
     }
     function stopPanning() {
       if (panIntervalId) { clearInterval(panIntervalId); panIntervalId = null; }
     }
+
     rateEl.addEventListener('input', () => { if (running && audioEnabledEl.checked) startPanning(); });
     volumeEl.addEventListener('input', () => { if (gain) gain.gain.value = +volumeEl.value; });
-    function onEdgeHit() {}
+    soundEl.addEventListener('change', () => {
+      audioFileEl.style.display = soundEl.value === 'custom' ? 'block' : 'none';
+      saveSettings();
+      if (running && audioEnabledEl.checked) {
+        stopSource();
+        currentSource = createSource();
+      }
+    });
+    audioEnabledEl.addEventListener('change', () => {
+      saveSettings();
+      if (!running) return;
+      if (audioEnabledEl.checked) {
+        ensureContext(); ac.resume();
+        stopSource();
+        currentSource = createSource();
+        if (currentSource) startPanning();
+      } else {
+        stopPanning(); stopSource();
+      }
+    });
+    audioFileEl.addEventListener('change', async (e) => {
+      const file = e.target.files && e.target.files[0];
+      if (!file) return;
+      ensureContext();
+      const arrayBuf = await file.arrayBuffer();
+      try {
+        loadedBuffer = await ac.decodeAudioData(arrayBuf);
+        if (running && audioEnabledEl.checked && soundEl.value === 'custom') {
+          stopSource();
+          currentSource = createSource();
+        }
+      } catch (err) {
+        alert('Could not read that audio file. Try MP3 or WAV.');
+      }
+    });
+
+    function onEdgeHit() { /* optional extra haptic already in panner tick */ }
 
     // --- Session timer ---
     let targetSeconds = +minutesEl.value * 60;
@@ -239,41 +334,11 @@
     function startAll() {
       if (running) return;
       running = true; paused = false; lastTs = 0;
-      if (audioEnabledEl.checked) { ensureAudio(); ac.resume(); startPanning(); }
-      startBtn.disabled = true; pauseBtn.disabled = false; resetBtn.disabled = false;
       rafId = requestAnimationFrame(animate);
-    }
-    function pauseAll() {
-      if (!running) return;
-      running = false; paused = true;
-      cancelAnimationFrame(rafId);
-      stopPanning();
-      startBtn.disabled = false; pauseBtn.disabled = true;
-    }
-    function stopAll() {
-      running = false; paused = false;
-      cancelAnimationFrame(rafId);
-      stopPanning();
-      startBtn.disabled = false; pauseBtn.disabled = true; resetBtn.disabled = true;
-      x = 0; dir = 1; lastTs = 0; dotEl.style.transform = `translate(0, -50%)`; barEl.style.transform = `translateX(0)`;
-      resetTimer();
-    }
 
-    startBtn.addEventListener('click', startAll);
-    pauseBtn.addEventListener('click', pauseAll);
-    resetBtn.addEventListener('click', stopAll);
-
-    // Init
-    let mqReduced = window.matchMedia('(prefers-reduced-motion: reduce)');
-    if (mqReduced.matches) { document.querySelector('.warning')?.insertAdjacentText('beforeend', ' Reduced-motion is on.'); }
-    resetTimer(); updateLabels();
-
-    window.addEventListener('beforeunload', saveSettings);
-
-    // PWA SW
-    if ('serviceWorker' in navigator) {
-      window.addEventListener('load', () => navigator.serviceWorker.register('./sw.js'));
-    }
-  </script>
-</body>
-</html>
+      if (audioEnabledEl.checked) {
+        ensureContext();
+        ac.resume();
+        stopSource();
+        currentSource = createSource();
+        if (curren
