@@ -1,0 +1,279 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="theme-color" content="#000000" />
+  <title>EMDR Bilateral Stim</title>
+  <link rel="manifest" href="manifest.webmanifest" />
+  <style>
+    :root { --bg:#000; --fg:#fff; --accent:#00e676; }
+    * { box-sizing: border-box; }
+    html, body { height: 100%; margin: 0; font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif; }
+    body { background: var(--bg); color: var(--fg); display: grid; place-items: center; }
+    .app { width: min(900px, 100%); padding: 16px; }
+    .card { border: 1px solid #ffffff22; border-radius: 16px; padding: 16px; background: #101010; }
+    .row { display: flex; flex-wrap: wrap; gap: 12px; align-items: center; }
+    .row > * { flex: 1; min-width: 120px; }
+    .title { font-size: 20px; margin: 0 0 8px; }
+    .notice { opacity: .7; font-size: 12px; margin-bottom: 12px; }
+    .stage { height: 220px; position: relative; border-radius: 12px; background: #000; overflow: hidden; border: 1px solid #ffffff22; }
+    .dot { position: absolute; top: 50%; left: 0; width: 28px; height: 28px; transform: translate(0, -50%); border-radius: 999px; background: var(--accent); box-shadow: 0 0 16px var(--accent); }
+    .bar { position: absolute; top: 0; left: 0; height: 100%; width: 8px; background: linear-gradient(#0f0, #0a0); box-shadow: 0 0 16px #0f0; display: none; }
+    button { padding: 10px 14px; border-radius: 12px; border: 1px solid #ffffff22; background: #1a1a1a; color: #fff; cursor: pointer; }
+    button:disabled { opacity: .5; cursor: default; }
+    input[type="range"] { width: 100%; }
+    label { font-size: 12px; opacity: .8; display: block; margin-bottom: 4px; }
+    .controls { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 12px; }
+    .footer { margin-top: 10px; font-size: 11px; opacity: .65; }
+    .warning { color: #ffb74d; }
+  </style>
+</head>
+<body>
+  <div class="app">
+    <div class="card">
+      <h1 class="title">EMDR Bilateral Stim (Free PWA)</h1>
+      <div class="notice">
+        Wellness tool only — not a medical device. If you feel unwell, stop and seek support.
+      </div>
+
+      <div id="stage" class="stage" aria-label="Visual stimulus area">
+        <div id="dot" class="dot" role="img" aria-label="moving dot"></div>
+        <div id="bar" class="bar" role="img" aria-label="moving bar"></div>
+      </div>
+
+      <div class="controls" style="margin-top: 16px;">
+        <div>
+          <label>Visual Mode</label>
+          <select id="visualMode">
+            <option value="dot">Dot</option>
+            <option value="bar">Bar</option>
+          </select>
+        </div>
+
+        <div>
+          <label>Speed (px/sec)</label>
+          <input id="speed" type="range" min="50" max="1200" step="10" value="300">
+          <div><span id="speedVal">300</span></div>
+        </div>
+
+        <div>
+          <label>Size (px)</label>
+          <input id="size" type="range" min="10" max="80" step="2" value="28">
+          <div><span id="sizeVal">28</span></div>
+        </div>
+
+        <div>
+          <label>Color</label>
+          <input id="color" type="color" value="#00e676">
+        </div>
+
+        <div>
+          <label>Audio On/Off</label>
+          <input id="audioEnabled" type="checkbox" checked>
+        </div>
+
+        <div>
+          <label>Audio Rate (Hz)</label>
+          <input id="rate" type="range" min="0.2" max="4" step="0.1" value="1.2">
+          <div><span id="rateVal">1.2</span> Hz</div>
+        </div>
+
+        <div>
+          <label>Volume</label>
+          <input id="volume" type="range" min="0" max="1" step="0.01" value="0.2">
+          <div><span id="volVal">0.20</span></div>
+        </div>
+
+        <div>
+          <label>Session (minutes)</label>
+          <input id="minutes" type="number" min="1" max="60" step="1" value="5">
+        </div>
+      </div>
+
+      <div class="row" style="margin-top: 12px;">
+        <button id="startBtn">Start</button>
+        <button id="pauseBtn" disabled>Pause</button>
+        <button id="resetBtn" disabled>Reset</button>
+        <div style="flex:2; text-align:right;">Time left: <span id="timeLeft">5:00</span></div>
+      </div>
+
+      <div class="footer">
+        Tip: On iOS, first tap <b>Start</b> to allow audio, then use <b>Share → Add to Home Screen</b> to install.
+        <span class="warning">Audio/haptics only begin after you press Start (browser security).</span>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    // --- DOM refs ---
+    const stage = document.getElementById('stage');
+    const dotEl = document.getElementById('dot');
+    const barEl = document.getElementById('bar');
+    const visualModeEl = document.getElementById('visualMode');
+    const speedEl = document.getElementById('speed');
+    const sizeEl = document.getElementById('size');
+    const colorEl = document.getElementById('color');
+    const audioEnabledEl = document.getElementById('audioEnabled');
+    const rateEl = document.getElementById('rate');
+    const volumeEl = document.getElementById('volume');
+    const minutesEl = document.getElementById('minutes');
+    const speedVal = document.getElementById('speedVal');
+    const sizeVal = document.getElementById('sizeVal');
+    const rateVal = document.getElementById('rateVal');
+    const volVal = document.getElementById('volVal');
+    const startBtn = document.getElementById('startBtn');
+    const pauseBtn = document.getElementById('pauseBtn');
+    const resetBtn = document.getElementById('resetBtn');
+    const timeLeft = document.getElementById('timeLeft');
+
+    // --- Local settings ---
+    const KEY = 'emdr.settings.v1';
+    const loadSettings = () => { try { return JSON.parse(localStorage.getItem(KEY)) || {}; } catch { return {}; } };
+    const saveSettings = () => {
+      const s = {
+        visual: { mode: visualModeEl.value, speed: +speedEl.value, size: +sizeEl.value, color: colorEl.value },
+        audio: { enabled: audioEnabledEl.checked, rate: +rateEl.value, volume: +volumeEl.value },
+        session: { minutes: +minutesEl.value }
+      };
+      localStorage.setItem(KEY, JSON.stringify(s));
+    };
+
+    const settings = loadSettings();
+    if (settings.visual) {
+      visualModeEl.value = settings.visual.mode ?? 'dot';
+      speedEl.value = settings.visual.speed ?? 300;
+      sizeEl.value = settings.visual.size ?? 28;
+      colorEl.value = settings.visual.color ?? '#00e676';
+    }
+    if (settings.audio) {
+      audioEnabledEl.checked = settings.audio.enabled ?? true;
+      rateEl.value = settings.audio.rate ?? 1.2;
+      volumeEl.value = settings.audio.volume ?? 0.2;
+    }
+    if (settings.session) minutesEl.value = settings.session.minutes ?? 5;
+
+    const updateLabels = () => {
+      speedVal.textContent = speedEl.value;
+      sizeVal.textContent = sizeEl.value;
+      rateVal.textContent = rateEl.value;
+      volVal.textContent = (+volumeEl.value).toFixed(2);
+      timeLeft.textContent = fmtTime(remainingMs/1000);
+    };
+    [visualModeEl, speedEl, sizeEl, colorEl, audioEnabledEl, rateEl, volumeEl, minutesEl]
+      .forEach(el => el.addEventListener('input', () => { saveSettings(); updateLabels(); applyVisualStyle(); }));
+
+    // --- Visual engine ---
+    let rafId = null, lastTs = 0, x = 0, dir = 1;
+    function applyVisualStyle() {
+      const size = +sizeEl.value;
+      dotEl.style.width = size + 'px';
+      dotEl.style.height = size + 'px';
+      dotEl.style.background = colorEl.value;
+      dotEl.style.boxShadow = `0 0 16px ${colorEl.value}`;
+      barEl.style.background = `linear-gradient(${colorEl.value}, ${colorEl.value}AA)`;
+      barEl.style.width = Math.max(6, Math.round(size/3)) + 'px';
+      const mode = visualModeEl.value;
+      dotEl.style.display = (mode === 'dot') ? 'block' : 'none';
+      barEl.style.display = (mode === 'bar') ? 'block' : 'none';
+    }
+    applyVisualStyle();
+
+    function animate(ts) {
+      if (!running) return;
+      const w = stage.clientWidth;
+      const size = +sizeEl.value;
+      const pxPerSec = +speedEl.value;
+      const dt = lastTs ? (ts - lastTs)/1000 : 0;
+      lastTs = ts;
+      x += dir * pxPerSec * dt;
+      const maxX = w - size;
+      if (x < 0) { x = 0; dir = 1; onEdgeHit(); }
+      else if (x > maxX) { x = maxX; dir = -1; onEdgeHit(); }
+      dotEl.style.transform = `translate(${x}px, -50%)`;
+      barEl.style.transform = `translateX(${x}px)`;
+      updateTimer(dt);
+      rafId = requestAnimationFrame(animate);
+    }
+
+    // --- Audio engine (Web Audio) ---
+    let ac, osc, gain, panner, panIntervalId = null, panState = -1;
+    function ensureAudio() {
+      if (!ac) {
+        ac = new (window.AudioContext || window.webkitAudioContext)();
+        osc = ac.createOscillator();
+        osc.type = 'sine';
+        gain = ac.createGain(); gain.gain.value = +volumeEl.value;
+        panner = new StereoPannerNode(ac, { pan: -1 });
+        osc.connect(gain).connect(panner).connect(ac.destination);
+        osc.start();
+      }
+    }
+    function startPanning() {
+      stopPanning();
+      const rate = +rateEl.value;
+      const periodMs = 1000 / rate;
+      panIntervalId = setInterval(() => {
+        panState = -panState;
+        if (panner) panner.pan.setValueAtTime(panState, ac.currentTime);
+        try { if (navigator.vibrate) navigator.vibrate(10); } catch {}
+      }, periodMs/2);
+    }
+    function stopPanning() {
+      if (panIntervalId) { clearInterval(panIntervalId); panIntervalId = null; }
+    }
+    rateEl.addEventListener('input', () => { if (running && audioEnabledEl.checked) startPanning(); });
+    volumeEl.addEventListener('input', () => { if (gain) gain.gain.value = +volumeEl.value; });
+    function onEdgeHit() {}
+
+    // --- Session timer ---
+    let targetSeconds = +minutesEl.value * 60;
+    let remainingMs = targetSeconds * 1000;
+    function fmtTime(s) { s = Math.max(0, Math.round(s)); const m = Math.floor(s/60), r = s%60; return `${m}:${String(r).padStart(2,'0')}`; }
+    function resetTimer() { targetSeconds = +minutesEl.value * 60; remainingMs = targetSeconds * 1000; timeLeft.textContent = fmtTime(remainingMs/1000); }
+    function updateTimer(dt) { remainingMs -= dt*1000; if (remainingMs <= 0) stopAll(); }
+    minutesEl.addEventListener('change', resetTimer);
+
+    // --- Controls ---
+    let running = false, paused = false;
+    function startAll() {
+      if (running) return;
+      running = true; paused = false; lastTs = 0;
+      if (audioEnabledEl.checked) { ensureAudio(); ac.resume(); startPanning(); }
+      startBtn.disabled = true; pauseBtn.disabled = false; resetBtn.disabled = false;
+      rafId = requestAnimationFrame(animate);
+    }
+    function pauseAll() {
+      if (!running) return;
+      running = false; paused = true;
+      cancelAnimationFrame(rafId);
+      stopPanning();
+      startBtn.disabled = false; pauseBtn.disabled = true;
+    }
+    function stopAll() {
+      running = false; paused = false;
+      cancelAnimationFrame(rafId);
+      stopPanning();
+      startBtn.disabled = false; pauseBtn.disabled = true; resetBtn.disabled = true;
+      x = 0; dir = 1; lastTs = 0; dotEl.style.transform = `translate(0, -50%)`; barEl.style.transform = `translateX(0)`;
+      resetTimer();
+    }
+
+    startBtn.addEventListener('click', startAll);
+    pauseBtn.addEventListener('click', pauseAll);
+    resetBtn.addEventListener('click', stopAll);
+
+    // Init
+    let mqReduced = window.matchMedia('(prefers-reduced-motion: reduce)');
+    if (mqReduced.matches) { document.querySelector('.warning')?.insertAdjacentText('beforeend', ' Reduced-motion is on.'); }
+    resetTimer(); updateLabels();
+
+    window.addEventListener('beforeunload', saveSettings);
+
+    // PWA SW
+    if ('serviceWorker' in navigator) {
+      window.addEventListener('load', () => navigator.serviceWorker.register('./sw.js'));
+    }
+  </script>
+</body>
+</html>
